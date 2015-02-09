@@ -4,16 +4,13 @@
 #
 # Author:      Efraim Helman
 #
-# Created:     02/11/2015
+# Created:     02/7/2015
 # Copyright:   (c) EH 2015
 # License:     MIT License
 #-------------------------------------------------------------------------------
 
-# first install anaconda, and then run from the terminal $ conda install pyserial
 
-# help: auto cleans, aligns comments!
-# code explorer, appendix explorer, but keep simple!
-
+import configparser
 import os
 import os.path
 import re
@@ -30,14 +27,12 @@ from PyQt4.QtGui import *
 
 class MainWindow(QMainWindow):
 
-    # fixme: syntax highlighting
-    # fixme: autocomplete
-    # fixme: link error lines to line in asm window
-    # red highlight those lines automaticly, don't just report?
-    # fixme: separate console from terminal?
-
     def __init__(self, parent=None):
         super().__init__(parent)
+
+        # configuration
+        self.config = configparser.ConfigParser()
+        self.config.read('config.ini')
 
         # widgets
         self.terminal_widget = TerminalWidget(self, self)
@@ -54,17 +49,28 @@ class MainWindow(QMainWindow):
         self.addToolBar(Qt.TopToolBarArea, self.main_toolbar)
 
     def closeEvent(self, event):
+        # close widgets
         self.code_widget.closeEvent(event)
         self.terminal_widget.closeEvent(event)
+        # save configuration
+        with open('config.ini', 'w') as config_file:
+            self.config.write(config_file)
+
+    def configure(self):
+        self.terminal_widget._log_error('Not implemented.')
 
 
 class MainToolbar(QToolBar):
     def __init__(self, root, parent=None):
         super().__init__('Main Toolbar', parent)
         self.root = root
-
-        self._add_button('Assemble', 'assemble.png', self.root.code_widget.assemble)
-        self._add_button('Send', 'refresh.png', self.root.code_widget.send)
+        self._add_button('Open', 'open.png', self.root.code_widget.open)
+        self._add_button('Save', 'save.png', self.root.code_widget.save)
+        self._add_button('New', 'new.png', self.root.code_widget.new)
+        self.addSeparator()
+        self._add_button('Send', 'download.png', self.root.code_widget.send)
+        self.addSeparator()
+        self._add_button('Configure', 'config.png', self.root.configure)
 
     def _add_button(self, tooltip, icon, action):
         button = QToolButton(self)
@@ -80,56 +86,63 @@ class CodeWidget(QPlainTextEdit):
         super().__init__(parent)
         self.root = root
 
-        # self.setCenterOnScroll(True)
-
         # generate file paths
-        self.file_path = 'code/lab.asm'
+        self.file_path = ''
         self.temp_dir_path = tempfile.mkdtemp('terminal')
         self.temp_asm_path = os.path.join(self.temp_dir_path, 'lab.asm')
         self.temp_hex_path = os.path.join(self.temp_dir_path, 'lab.hex')
 
         # text settings
-        self.line_length = 80  # number or characters allowed in line before comment wraps
-        self.tab_length = 4  # number of spaces to replace a tab with
+        self.line_length = int(self.root.config['code']['line_length'])  # number of chars before comment wraps
+        self.tab_length = int(self.root.config['code']['tab_length'])  # number of spaces to replace a tab with
 
         # use monospaced font
         fixed_font = QFont('Monospace')
         fixed_font.setStyleHint(QFont.TypeWriter)
         self.setFont(fixed_font)
+        self.syntax_highlighter = SyntaxHighlighter(self.document(), self.root.config)
 
         # size the view-port based on line_length and the chosen _fixed_ font
         font_width = QFontMetrics(fixed_font).averageCharWidth()
         # for some reason need to multiply by about 1.15 (found by trial and error)
         self.setMinimumWidth(font_width*self.line_length*1.15)
+        # self.setCenterOnScroll(True)
 
         # serial
         self.terminal = self.root.terminal_widget
 
         # logging
-        self._log = self.terminal._log
+        self._log_message = self.terminal._log_message
         self._log_error = self.terminal._log_error
 
-        self.open()
+        # open most last file if it exists
+        recent_file = self.root.config['file']['last']
+        if recent_file and os.path.exists(recent_file):
+            self.open(recent_file)
 
     def assemble(self):
-        # save current asm to temp_asm
+        # save code to temporary file and
+        # add trailing newline to prevent as31 from throwing a syntax error
         with open(self.temp_asm_path, 'w') as temp_asm_file:
-            asm = self.toPlainText()
-            # add trailing newline to prevent assembler throwing error
-            asm += '\n'
-            temp_asm_file.write(asm)
+            temp_asm_file.write(self.toPlainText() + '\n')
 
-        # assemble temp_asm
-        as31_process = subprocess.Popen(['as31', '-l', self.temp_asm_path],
-                                        stdout=subprocess.PIPE,
-                                        stderr=subprocess.PIPE)
+        # choose correct assembler
+        if sys.platform == 'darwin':
+            assembler = 'resources/as31/as31_osx'
+        elif sys.platform == 'win32':
+            assembler = 'resources/as31/as31_win'
+
+        # assemble code
+        as31_process = subprocess.Popen([assembler, '-l', self.temp_asm_path],
+          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         output, errors = as31_process.communicate()
         errors = errors.decode("utf-8")
 
         # no errors
         if errors == 'Begin Pass #1\nBegin Pass #2\n':
-            self.setExtraSelections([])  # clear anything previously highlighted as an error
-            self._log('Code assembled successfully.')
+            # un-mark lines previously marked as errors
+            self.setExtraSelections([])
+            self._log_message('Code assembled successfully.')
             return True
 
         # yes errors
@@ -164,8 +177,40 @@ class CodeWidget(QPlainTextEdit):
         return code
 
     def closeEvent(self, event):
+        # clean up temporary files
         if self.temp_dir_path:
             shutil.rmtree(self.temp_dir_path)
+        # save configuration
+        self.root.config['file']['last'] = self.file_path
+        self.root.config['code']['line_length'] = str(self.line_length)
+        self.root.config['code']['tab_length'] = str(self.tab_length)
+
+    def dragEnterEvent(self, event):
+        # open files through drag and drop
+        if event.mimeData().hasUrls() and self._url_can_be_opened(event.mimeData().urls()[0]):
+            event.accept()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls() and self._url_can_be_opened(event.mimeData().urls()[0]):
+            event.accept()
+            event.setDropAction(Qt.CopyAction)
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls() and self._url_can_be_opened(event.mimeData().urls()[0]):
+            event.accept()
+            self.open(event.mimeData().urls()[0].toLocalFile())
+        else:
+            event.ignore()
+
+    def _url_can_be_opened(self, url):
+        path = url.toLocalFile()
+        if path[-4:] in ('.asm', '.txt') and os.path.exists(path):
+            return True
+        return False
 
     def insertFromMimeData(self, source):
         # catch any attempt to paste text and clean it up first
@@ -251,31 +296,94 @@ class CodeWidget(QPlainTextEdit):
         else:
             super().keyPressEvent(event)
 
-    def open(self):
-        with open(self.file_path, 'r') as asm_file:
-            # text
-            code = asm_file.read()
+    def new(self):
+        self.file_path = ''
+        self.setPlainText('')
+        self.setExtraSelections([])
+        self.syntax_highlighter.setDocument(self.document())
+
+    def open(self, file_path=None):
+        # get file_path
+        if not file_path:
+            #fixme: default/last path; only allow certain filetypes
+            file_path = QFileDialog.getOpenFileName(self, 'Open...', filter='Assembly files (*.asm), Text files (*.txt)')
+            if not file_path:
+                return
+        # open file
+        with open(file_path, 'r') as file:
+            code = file.read()
             code = self.clean(code)
-            # display
             self.setPlainText(code)
+            self.setExtraSelections([])
+            self.syntax_highlighter.setDocument(self.document())
+        self.file_path = file_path
 
     def save(self):
-        pass
+        # get path
+        file_path = self.file_path
+        if not file_path:
+            file_path = QFileDialog.getSaveFileName(self, 'Save as...', filter='Assembly files (*.asm)')
+            if not file_path:
+                return
+        # save file
+        # add trailing newline to prevent as31 from throwing a syntax error
+        with open(file_path, 'w') as file:
+            file.write(self.toPlainText() + '\n')
+        self.file_path = file_path
 
     def send(self):
+        # assemble code
+        if not self.assemble():
+            return
         # make sure a port is open
         if not self.terminal.serial_port:
             self._log_error('No open connection.')
             return
-        # assemble code
-        if not self.assemble():
-            return
         # read hex data from assembled code
         with open(self.temp_hex_path, 'rb') as temp_hex_file:
             hex_data = temp_hex_file.read()
-            # hex_data = hex_data.replace(b'\n', b'').replace(b'\r', b'')
         # send hex data
         self.terminal.serial_download(hex_data)
+
+
+class SyntaxHighlighter(QSyntaxHighlighter):
+
+    # 8051 instructions
+    instructions = ['acall', 'add', 'addc', 'ajmp', 'anl', 'cjne', 'clr', 'cpl',
+                    'da', 'dec', 'div', 'djnz', 'inc', 'jb', 'jbc', 'jc', 'jmp',
+                    'jnb', 'jnc', 'jnz', 'jz', 'lcall', 'ljmp', 'mov', 'movc',
+                    'movx', 'mul', 'nop', 'orl', 'pop', 'push', 'ret', 'reti',
+                    'rl', 'rlc', 'rr', 'rrc', 'setb', 'sjmp', 'subb', 'swap',
+                    'xch', 'xrl']
+
+    def __init__(self, document, config):
+        super().__init__(document)
+        # fixme: addresses, decl, unknowns, regs, numbers/hex, etc
+        self.rules = []
+        # comments
+        style = self.style(config['code']['comment'])
+        self.rules.append(('(;.*)(?:\n|$)', style))
+        # instructions
+        style = self.style(config['code']['instruction'])
+        self.rules.append(('(?:\n|^) *(%s)' % '|'.join(SyntaxHighlighter.instructions), style))
+        # labels
+        style = self.style(config['code']['label'])
+        self.rules.append(('(?:\n|^)([a-zA-Z$_][a-zA-Z0-9$_]*:)', style))
+
+    def style(self, description=''):
+        values = description.split(', ')
+        style = QTextCharFormat()
+        style.setForeground(QColor(values[0]))  # first value must be a color
+        if 'bold' in values:
+            style.setFontWeight(QFont.Bold)
+        if 'italic' in values:
+            style.setFontItalic(True)
+        return style
+
+    def highlightBlock(self, text):
+        for pattern, style in self.rules:
+            for match in re.finditer(pattern, text):
+                self.setFormat(match.start(1), match.end(1) - match.start(1), style)
 
 
 class TerminalWidget(QPlainTextEdit):
@@ -300,8 +408,8 @@ class TerminalWidget(QPlainTextEdit):
         self.echo = False
 
         # serial communications
-        self.baud_rate = 9600
-        self.port_names = ['/dev/tty.usbserial', 'com1']
+        self.baud_rate = int(self.root.config['serial']['baud_rate'])
+        self.port_name = self.root.config['serial']['port_name']
         self.serial_data = None
         self.serial_port = None
         self.serial_thread = None
@@ -315,10 +423,12 @@ class TerminalWidget(QPlainTextEdit):
         # (needed for communication with thread, throws errors when trying to manipulate QWidgets directly)
         self.data_received.connect(self._log_serial)
         self.log_error.connect(self._log_error)
-        self.log_message.connect(self._log)
+        self.log_message.connect(self._log_message)
 
     def closeEvent(self, event):
         self.serial_close()
+        self.root.config['serial']['baud_rate'] = str(self.baud_rate)
+        self.root.config['serial']['port_name'] = self.port_name
 
     def keyPressEvent(self, event):
         char = event.text()
@@ -378,10 +488,11 @@ class TerminalWidget(QPlainTextEdit):
     def serial_interface(self):
         # used by serial_thread to interface with r31jp device at serial_port
         while not self.serial_thread_close.is_set():
-
             # open port
             if not self.serial_port:
-                for port_name in self.port_names:
+                # fixme: serial.tools.list_ports.comports()
+                port_names = [self.port_name] + ['/dev/tty.usbserial', 'com1']  # default and backup ports to scan
+                for port_name in port_names:
                     # try opening a port
                     try:
                         # use a timeout to allow thread to check for serial_thread_close event and not get stuck at read
@@ -426,7 +537,7 @@ class TerminalWidget(QPlainTextEdit):
             else:
                 self._serial_read()
 
-            # don't loop like crazy; once every tenth second should be plenty
+            # saves some power (?)
             time.sleep(0.1)
 
     def _serial_read(self):
@@ -458,13 +569,10 @@ class TerminalWidget(QPlainTextEdit):
         self.data_sent.emit(data)
 
     def serial_open(self, port_name=None, baud_rate=None):
-        # serial settings
-        self.port_names = [port_name] if port_name else self.port_names  # fixme: serial.tools.list_ports.comports()
-        self.baud_rate = baud_rate if baud_rate else self.baud_rate
         # initiate interface thread
-        self._log('Searching for serial device...')
+        self._log_message('Searching for serial device...')
         self.serial_thread = threading.Thread(target=self.serial_interface)
-        self.serial_thread.setDaemon(1)  # don't shut down while of communication with device
+        self.serial_thread.setDaemon(1)  # don't shut down while communicating with device
         self.serial_thread.start()
 
     def serial_write(self, data):
@@ -482,18 +590,19 @@ class TerminalWidget(QPlainTextEdit):
         # fixme: is this waiting necessary?
         while self.serial_thread_write.is_set():
             QCoreApplication.instance().processEvents(QEventLoop.ExcludeUserInputEvents)  # display messages to terminal
-            time.sleep(0.1)  # save some power (?)
-
-    def _log(self, message):
-        for line in message.split('\n'):  # since using html, \n doesn't mean anything
-            self.appendHtml('<span style="color:blue;font-weight:bold;">%s</span>' % line)
+            time.sleep(0.1)  # saves some power (?)
 
     def _log_error(self, description):
         for line in description.split('\n'):  # since using html, \n doesn't mean anything
             self.appendHtml('<span style="color:red;font-weight:bold;">%s</span>' % line)
 
+    def _log_message(self, message):
+        for line in message.split('\n'):  # since using html, \n doesn't mean anything
+            self.appendHtml('<span style="color:blue;font-weight:bold;">%s</span>' % line)
+
     def _log_serial(self, data):
-        # insert at end without a newline or any special formatting
+        # log data received from connected device
+        # with no newline or special formatting
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.End)
         cursor.setCharFormat(QTextCharFormat())
@@ -501,13 +610,13 @@ class TerminalWidget(QPlainTextEdit):
         # scroll to cursor
         self.setTextCursor(cursor)
 
+
 def launch():
     application = QApplication(sys.argv)
     main_window = MainWindow()
     main_window.resize(1000,600)
     main_window.show()
     sys.exit(application.exec_())
-
 
 if __name__ == '__main__':
     launch()

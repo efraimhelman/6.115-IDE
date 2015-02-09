@@ -18,6 +18,12 @@ Installation
 2. Suggested installation for Win
 	a. none
 
+-----
+Usage
+-----
+
+Should be pretty intuitive, but will eventually write more, because there are some things that could use explaining.
+
 --------
 Features
 --------
@@ -26,10 +32,22 @@ Features
 - automatically searches for and connects to serial device even when plugging in later
 - assembles and downloads code with one click
 - highlights code that caused assembler to throw errors
+- drag and drop asm & txt files in code editor to open
+- basic syntax highlighting, though admittedly the default color scheme is awful...
 
 todo:
-- syntax highlighting
-- keep comments aligned and neat
+- some basic toolbar and title-bar additions, including save-as
+- some basic icon modifications, including size
+- automatically keep comments aligned and neat, fix bugs with current implementation
+- test on windows
+- extended syntax highlighting
+- autocomplete
+- tooltips with information on 8051 syntax
+- searchable instructions by category like in manual
+- automatically maintain and load code appendix
+- code explorer/tree? but keep interface simple...
+- warn about unsaved work before exiting
+- scan ports other than most common two or give option of ports to try
 
 ————---
 Credits
@@ -47,5 +65,15 @@ Distributed under the MIT license, but subject to the licensing of all packages 
 Changelog
 ---------
 
+version 0.02
+- added as31 for win and os recognition
+- added drag and drop txt and asm files
+- added configuration file
+- added memory of last open file
+- added basic syntax highlighting
+- added open, save, new and removed assemble
+- fixed misc bugs
+- [a regression is possible, as I did not have a chance to test changes on R-31JP yet]
+
 version 0.01
-- released with basic features
+- released fully operational version, albeit with limited though useful features
