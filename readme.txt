@@ -56,6 +56,7 @@ Features
 - basic auto completion and syntax highlighting, though admittedly the default color scheme is awful...
 
 todo:
+- title/statusbar
 - warn about unsaved work before exiting
 - automatically keep comments aligned and neat
 - extended syntax highlighting and auto completion
@@ -82,6 +83,11 @@ Distributed under the MIT license, but subject to the licensing of all packages 
 ---------
 Changelog
 ---------
+
+version 0.04
+- added workaround for UnicodeDecodeError when unencodable data received
+- added proper queueing for the serial interface
+- added serial port read_timeout variable to config.ini; affects how responsive terminal/device is
 
 version 0.03
 - added as31 source code with instructions for building on individual systems

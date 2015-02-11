@@ -13,6 +13,7 @@
 import configparser
 import os
 import os.path
+import queue
 import re
 import sys
 import serial
@@ -506,23 +507,25 @@ class TerminalWidget(QPlainTextEdit):
         # terminal settings
         self.echo = False
 
-        # serial communications
+        # serial interface thread
         self.baud_rate = int(self.root.config['serial']['baud_rate'])
         self.port_name = self.root.config['serial']['port_name']
-        self.serial_data = None
+        self.read_timeout = float(self.root.config['serial']['read_timeout'])
         self.serial_port = None
         self.serial_thread = None
         self.serial_thread_close = threading.Event()
-        self.serial_thread_connected = threading.Event()
-        self.serial_thread_download = threading.Event()
-        self.serial_thread_write = threading.Event()
-        self.serial_open()
+        self.serial_queue = queue.Queue()
 
-        # signals
-        # needed for communication with thread, throws errors when trying to manipulate QWidgets directly
+        # signals needed for communication with thread; it throws errors when trying to manipulate QWidgets directly
         self.data_received.connect(self._log_serial)
         self.log_error.connect(self._log_error)
         self.log_message.connect(self._log_message)
+
+        # start serial interface thread
+        self._log_message('Searching for serial device...')
+        self.serial_thread = threading.Thread(target=self.serial_interface)
+        self.serial_thread.setDaemon(1)  # don't shut down while communicating with device
+        self.serial_thread.start()
 
     def closeEvent(self, event):
         self.serial_close()
@@ -575,18 +578,14 @@ class TerminalWidget(QPlainTextEdit):
         if not self.serial_port:
             self.log_error.emit('No open connection.')
             return
-        # send download to serial_thread
-        self.serial_data = data
-        self.serial_thread_download.set()
-        # wait for download to complete
-        # fixme: is this waiting necessary?
-        while self.serial_thread_download.is_set():
-            QCoreApplication.instance().processEvents(QEventLoop.ExcludeUserInputEvents)  # display messages to terminal
-            time.sleep(0.1)  # save some power (?)
+        # send data to serial_thread
+        self.serial_queue.put(('download', data))
 
     def serial_interface(self):
+
         # used by serial_thread to interface with r31jp device at serial_port
         while not self.serial_thread_close.is_set():
+
             # open port
             if not self.serial_port:
                 # fixme: serial.tools.list_ports.comports()
@@ -595,49 +594,65 @@ class TerminalWidget(QPlainTextEdit):
                     # try opening a port
                     try:
                         # use a timeout to allow thread to check for serial_thread_close event and not get stuck at read
-                        self.serial_port = serial.Serial(port_name, baudrate=self.baud_rate, timeout=1)
+                        self.serial_port = serial.Serial(port_name, baudrate=self.baud_rate, timeout=self.read_timeout)
                     except serial.SerialException as exception:
                         self.serial_port = None
                     if self.serial_port:
+                        # fixme: reset queue?
                         self.log_message.emit('Device connected.')
-                        self.serial_thread_connected.set()
                         break
-
-            # download data to device
-            elif self.serial_thread_download.is_set():
-                self.log_message.emit('Hit RESET in MON mode to download file...')
-                # wait for r31jp to be ready
-                while True:  # fixme: add a timeout?
-                    data = self._serial_read()
-                    if data == b'*':
-                        break
-                # initiate transfer
-                self._serial_write(b'DD')
-                while True:  # fixme: add a timeout?
-                    data = self._serial_read()
-                    if data == b'>':
-                        break
-                # send data
-                self.log_message.emit('Sending data...')
-                self._serial_write(self.serial_data)
-                while True:  # fixme: add a timeout?
-                    data = self._serial_read()
-                    if data and not data == b'.':
-                        break
-                self.log_message.emit('Data sent successfully.')
-                self.serial_thread_download.clear()
-
-            # write data to device
-            elif self.serial_thread_write.is_set():
-                self._serial_write(self.serial_data)
-                self.serial_thread_write.clear()
+                if not self.serial_port:
+                    continue
 
             # read data from device
-            else:
-                self._serial_read()
+            self._serial_read()
 
-            # saves some power (?)
-            time.sleep(0.1)
+            # write data to device
+            if not self.serial_queue.empty():
+
+                action, write_data = self.serial_queue.get()
+
+                if action == 'download':
+                    self.log_message.emit('Hit RESET in MON mode to download file...')
+                    # wait for r31jp to be ready
+                    while True:  # fixme: add a timeout?
+                        read_data = self._serial_read()
+                        if read_data == b'*':
+                            break
+                    # initiate transfer
+                    self._serial_write(b'DD')
+                    while True:  # fixme: add a timeout?
+                        read_data = self._serial_read()
+                        if read_data == b'>':
+                            break
+                    # send data
+                    self.log_message.emit('Sending data...')
+                    self._serial_write(write_data)
+                    while True:  # fixme: add a timeout?
+                        read_data = self._serial_read()
+                        if read_data and not read_data == b'.':
+                            break
+                    self.log_message.emit('Data sent successfully.')
+
+                elif action == 'write':
+                    self._serial_write(write_data)
+
+                else:
+                    raise ValueError()
+
+            # fixme: saves some power (?)
+            # time.sleep(0.01)
+
+    def serial_write(self, data):
+        # check that port is open
+        if not self.serial_port:
+            self.log_message.emit('No open connection.')
+            return
+        # make sure data is in byte form
+        if not isinstance(data, bytes):
+            data = data.encode('utf-8')
+        # send data to serial_thread
+        self.serial_queue.put(('write', data))
 
     def _serial_read(self):
         try:
@@ -667,30 +682,6 @@ class TerminalWidget(QPlainTextEdit):
         # signal that data was sent
         self.data_sent.emit(data)
 
-    def serial_open(self, port_name=None, baud_rate=None):
-        # initiate interface thread
-        self._log_message('Searching for serial device...')
-        self.serial_thread = threading.Thread(target=self.serial_interface)
-        self.serial_thread.setDaemon(1)  # don't shut down while communicating with device
-        self.serial_thread.start()
-
-    def serial_write(self, data):
-        # check that port is open
-        if not self.serial_port:
-            self.log_message.emit('No open connection.')
-            return
-        # make sure data is in byte form
-        if not isinstance(data, bytes):
-            data = data.encode('utf-8')
-        # send download to serial_thread
-        self.serial_data = data
-        self.serial_thread_write.set()
-        # wait for download to complete
-        # fixme: is this waiting necessary?
-        while self.serial_thread_write.is_set():
-            QCoreApplication.instance().processEvents(QEventLoop.ExcludeUserInputEvents)  # display messages to terminal
-            time.sleep(0.1)  # saves some power (?)
-
     def _log_error(self, description):
         for line in description.split('\n'):  # since using html, \n doesn't mean anything
             self.appendHtml('<span style="color:red;font-weight:bold;">%s</span>' % line)
@@ -705,9 +696,17 @@ class TerminalWidget(QPlainTextEdit):
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.End)
         cursor.setCharFormat(QTextCharFormat())
-        cursor.insertText(data.decode("utf-8"))
-        # scroll to cursor
-        self.setTextCursor(cursor)
+
+        try:
+            text = data.decode('utf-8')
+        except UnicodeDecodeError as error:
+            text = data.decode('utf-8', 'ignore')
+            self._log_error('Some data received that could not be encoded in UTF-8.')
+
+        if text:
+            cursor.insertText(text)
+            # scroll to cursor
+            self.setTextCursor(cursor)
 
 
 def launch():
