@@ -21,8 +21,18 @@ import subprocess
 import tempfile
 import threading
 import time
-from PyQt4.QtCore import *
-from PyQt4.QtGui import *
+from PyQt5.QtCore import *
+from PyQt5.QtGui import *
+from PyQt5.QtWidgets import *
+
+
+# assembly instructions in 8051 for R-31JP
+INSTRUCTIONS_8051 = ['acall', 'add', 'addc', 'ajmp', 'anl', 'cjne', 'clr', 'cpl',
+                    'da', 'dec', 'div', 'djnz', 'inc', 'jb', 'jbc', 'jc', 'jmp',
+                    'jnb', 'jnc', 'jnz', 'jz', 'lcall', 'ljmp', 'mov', 'movc',
+                    'movx', 'mul', 'nop', 'orl', 'pop', 'push', 'ret', 'reti',
+                    'rl', 'rlc', 'rr', 'rrc', 'setb', 'sjmp', 'subb', 'swap',
+                    'xch', 'xrl']
 
 
 class MainWindow(QMainWindow):
@@ -57,7 +67,7 @@ class MainWindow(QMainWindow):
             self.config.write(config_file)
 
     def configure(self):
-        self.terminal_widget._log_error('Not implemented.')
+        self.terminal_widget._log_error('Not implemented. Edit config.ini file.')
 
 
 class MainToolbar(QToolBar):
@@ -68,15 +78,17 @@ class MainToolbar(QToolBar):
         self._add_button('Save', 'save.png', self.root.code_widget.save)
         self._add_button('New', 'new.png', self.root.code_widget.new)
         self.addSeparator()
-        self._add_button('Send', 'download.png', self.root.code_widget.send)
+        self._add_button('Assemble and send', 'device.png', self.root.code_widget.send)
         self.addSeparator()
         self._add_button('Configure', 'config.png', self.root.configure)
 
     def _add_button(self, tooltip, icon, action):
+        # fixme: use QActions?
+        # fixme: add shortcuts
         button = QToolButton(self)
-        button.setToolTip(tooltip)
-        button.setIcon(QIcon('resources/images/%s' % icon))
         button.clicked.connect(action)
+        button.setIcon(QIcon('resources/images/%s' % icon))
+        button.setToolTip(tooltip)
         self.addWidget(button)
 
 
@@ -95,18 +107,30 @@ class CodeWidget(QPlainTextEdit):
         # text settings
         self.line_length = int(self.root.config['code']['line_length'])  # number of chars before comment wraps
         self.tab_length = int(self.root.config['code']['tab_length'])  # number of spaces to replace a tab with
+        # self.setCenterOnScroll(True)
 
         # use monospaced font
-        fixed_font = QFont('Monospace')
-        fixed_font.setStyleHint(QFont.TypeWriter)
+        fixed_font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+        fixed_font.setPixelSize(12)
         self.setFont(fixed_font)
-        self.syntax_highlighter = SyntaxHighlighter(self.document(), self.root.config)
-
-        # size the view-port based on line_length and the chosen _fixed_ font
         font_width = QFontMetrics(fixed_font).averageCharWidth()
-        # for some reason need to multiply by about 1.15 (found by trial and error)
-        self.setMinimumWidth(font_width*self.line_length*1.15)
-        # self.setCenterOnScroll(True)
+        self.setMinimumWidth(font_width * self.line_length * 1.1)
+
+        # setup auto completion and syntax highlighting
+        self.prefix = None
+        self.suffix = None
+        self.suggestion = QListWidget(self)
+        self.suggestion.activated.connect(self.suggestion.hide)
+        self.suggestion.activated.connect(lambda index: self._apply_suggestion(self.suggestion.itemFromIndex(index).text()))
+        self.suggestion.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.suggestion.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.suggestion.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.suggestion.setFocusProxy(self)
+        self.suggestion.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.suggestion.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.suggestion.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.suggestion.show = self._show_suggestion
+        self.syntax_highlighter = SyntaxHighlighter(self.document(), self.root.config)
 
         # serial
         self.terminal = self.root.terminal_widget
@@ -115,7 +139,7 @@ class CodeWidget(QPlainTextEdit):
         self._log_message = self.terminal._log_message
         self._log_error = self.terminal._log_error
 
-        # open most last file if it exists
+        # open recent file if it exists
         recent_file = self.root.config['file']['last']
         if recent_file and os.path.exists(recent_file):
             self.open(recent_file)
@@ -173,10 +197,11 @@ class CodeWidget(QPlainTextEdit):
         code = re.sub(' +(?=\n|$)', '', code)
         code = re.sub('\n\n\n+', '\n', code)  # fixme: yes? no?
         # code = re.sub('^\n\n+', '\n', code) messes up copies in middle fixme: separate copy and original paste?
-        #code = re.sub('\n+$', '', code)
+        # code = re.sub('\n+$', '', code)
         return code
 
     def closeEvent(self, event):
+        # fixme: check and ask user to save code if needed
         # clean up temporary files
         if self.temp_dir_path:
             shutil.rmtree(self.temp_dir_path)
@@ -220,13 +245,21 @@ class CodeWidget(QPlainTextEdit):
             self.textCursor().insertText(text)
 
     def keyPressEvent(self, event):
+
+        # if keypress is directed at suggestion popup let it handle it
+        if self.suggestion.isVisible() and event.key() in \
+                (Qt.Key_Enter, Qt.Key_Return, Qt.Key_Escape,
+                 Qt.Key_Tab, Qt.Key_Backtab, Qt.Key_Down, Qt.Key_Up):
+            self.suggestion.keyPressEvent(event)
+            return
+
         char = event.text()
         key = event.key()
 
         # convert tabs to spaces
-        if char == '\t':
+        if key == Qt.Key_Tab:
             event.accept()
-            self.textCursor().insertText(' '*self.tab_length)
+            self.textCursor().insertText(' ' * self.tab_length)
 
         # auto-indent newlines
         elif char in ('\n', '\r'):
@@ -296,6 +329,12 @@ class CodeWidget(QPlainTextEdit):
         else:
             super().keyPressEvent(event)
 
+        # provide auto completion suggestions
+        if event.text() or event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
+            self.suggestion.show()
+        else:
+            self.suggestion.hide()
+
     def new(self):
         self.file_path = ''
         self.setPlainText('')
@@ -305,8 +344,8 @@ class CodeWidget(QPlainTextEdit):
     def open(self, file_path=None):
         # get file_path
         if not file_path:
-            #fixme: default/last path; only allow certain filetypes
-            file_path = QFileDialog.getOpenFileName(self, 'Open...', filter='Assembly files (*.asm), Text files (*.txt)')
+            # fixme: default/last path; only allow certain filetypes
+            file_path, filter = QFileDialog.getOpenFileName(self, 'Open...', filter='Assembly (*.asm *.txt)')
             if not file_path:
                 return
         # open file
@@ -322,7 +361,7 @@ class CodeWidget(QPlainTextEdit):
         # get path
         file_path = self.file_path
         if not file_path:
-            file_path = QFileDialog.getSaveFileName(self, 'Save as...', filter='Assembly files (*.asm)')
+            file_path, filter = QFileDialog.getSaveFileName(self, 'Save as...', filter='Assembly (*.asm)')
             if not file_path:
                 return
         # save file
@@ -345,16 +384,75 @@ class CodeWidget(QPlainTextEdit):
         # send hex data
         self.terminal.serial_download(hex_data)
 
+    def _apply_suggestion(self, suggestion):
+        new_suffix = suggestion[len(self.prefix):]
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, len(self.suffix))
+        cursor.insertText(new_suffix)
+        self.setTextCursor(cursor)
+
+    def _get_suggestion(self):
+
+        suggestion = []
+        position = self.textCursor().positionInBlock()
+        line = self.textCursor().block().text()
+        line_prefix = line[:position]
+        line_suffix = line[position:]
+
+        # if instruction
+        match = re.match(' *([a-zA-Z]+)$', line_prefix)
+        if match:
+            self.prefix = match.group(1)
+            self.suffix = re.match('([a-zA-Z]*)', line_suffix).group(1)
+            suggestion = [ins for ins in INSTRUCTIONS_8051 if ins.startswith(self.prefix)]
+            if len(suggestion) == 1 and suggestion[0] == self.prefix:
+                suggestion = []
+
+        return suggestion
+
+    def _show_suggestion(self):
+
+        # contents of popup
+        suggestion = self._get_suggestion()
+        if suggestion:
+            self.suggestion.clear()
+            self.suggestion.addItems(suggestion)
+            if self.prefix + self.suffix in suggestion:
+                self.suggestion.setCurrentRow(suggestion.index(self.prefix + self.suffix))
+            else:
+                self.suggestion.setCurrentRow(0)
+        else:
+            self.suggestion.hide()
+            return
+
+        # size and placement of popup
+        screen = QApplication.desktop().availableGeometry(self)
+        position = self.mapToGlobal(self.cursorRect().bottomLeft())
+        x, y = position.x(), position.y()
+
+        width = self.suggestion.sizeHintForColumn(0) + self.suggestion.verticalScrollBar().sizeHint().width()
+        if width > screen.width():
+            width = screen.width()
+        if x + width > screen.left() + screen.width():
+            x = screen.left() + screen.width() - width
+        if x < screen.left():
+            x = screen.left()
+
+        height = max(self.suggestion.sizeHintForRow(0) * min(7, len(suggestion)) + 6, self.suggestion.minimumHeight())
+        cursor_height = self.cursorRect().height()
+        top = y - cursor_height - screen.top() + 2
+        bottom = screen.bottom() - y
+        if height > bottom:
+            height = min(max(top, bottom), height)
+            if top > bottom:
+                y = y - height - cursor_height + 2
+
+        self.suggestion.setGeometry(x, y, width, height)
+        if not self.suggestion.isVisible():
+            super(QListWidget, self.suggestion).show()
+
 
 class SyntaxHighlighter(QSyntaxHighlighter):
-
-    # 8051 instructions
-    instructions = ['acall', 'add', 'addc', 'ajmp', 'anl', 'cjne', 'clr', 'cpl',
-                    'da', 'dec', 'div', 'djnz', 'inc', 'jb', 'jbc', 'jc', 'jmp',
-                    'jnb', 'jnc', 'jnz', 'jz', 'lcall', 'ljmp', 'mov', 'movc',
-                    'movx', 'mul', 'nop', 'orl', 'pop', 'push', 'ret', 'reti',
-                    'rl', 'rlc', 'rr', 'rrc', 'setb', 'sjmp', 'subb', 'swap',
-                    'xch', 'xrl']
 
     def __init__(self, document, config):
         super().__init__(document)
@@ -364,8 +462,9 @@ class SyntaxHighlighter(QSyntaxHighlighter):
         style = self.style(config['code']['comment'])
         self.rules.append(('(;.*)(?:\n|$)', style))
         # instructions
+        # use reversed() so checks for full instruction instead of stopping 'movx' after finding 'mov'
         style = self.style(config['code']['instruction'])
-        self.rules.append(('(?:\n|^) *(%s)' % '|'.join(SyntaxHighlighter.instructions), style))
+        self.rules.append(('(?:\n|^) *(%s)(?:[ ;]|$)' % '|'.join(reversed(INSTRUCTIONS_8051)), style))
         # labels
         style = self.style(config['code']['label'])
         self.rules.append(('(?:\n|^)([a-zA-Z$_][a-zA-Z0-9$_]*:)', style))
@@ -420,7 +519,7 @@ class TerminalWidget(QPlainTextEdit):
         self.serial_open()
 
         # signals
-        # (needed for communication with thread, throws errors when trying to manipulate QWidgets directly)
+        # needed for communication with thread, throws errors when trying to manipulate QWidgets directly
         self.data_received.connect(self._log_serial)
         self.log_error.connect(self._log_error)
         self.log_message.connect(self._log_message)

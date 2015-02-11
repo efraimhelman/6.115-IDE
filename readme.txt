@@ -1,59 +1,77 @@
+
 ————--------
 Requirements
 ————--------
 
-1. python, pyQt, and pySerial
-2. probably only compatible with py3.x
-3. only tested on OS X
-4. only tested with certain serial ports; it doesn’t know where to look otherwise
+1. A python, pyQt5, and pySerial environment
+2. As of now only tested with py3.x and pyQt5, and probably only works with these
+3. As of now only tested with OsX, but should work with Windows and Linux
+4. As of now only scans for `com1` and `/dev/tty.usbserial` serial ports - edit config.ini if needed
 
-————--------
-Installation
-————--------
+————------------------
+Suggested Installation
+————------------------
 
-1. Suggested installation for OS X
-	a. google, download, and install the anaconda python 3.4 distribution
-	b. run from the terminal: $ conda install pyserial
+OsX:
+1. Install python3.4, pySerial, and pyQt5
+    a. open terminal
+    b. run $ ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
+    c. follow instructions to install homebrew
+    d. run $ brew install python3
+    e. run $ brew install pyqt5 --with-python3
+    f. run $ pip3 install pyserial
+2. Download 6.115-IDE from git and launch main.py
 
-2. Suggested installation for Win
-	a. none
+Windows:
+1. Install python3.4, pySerial, and pyQt5
+    a. google, download, and install a python3.4 windows distribution
+    b. google, download, and install the pyQt5 windows distribution
+    c. google, download, and install the pySerial windows distribution
+2. Download 6.115-IDE from git and launch main.py
+
+Other (Linux, etc):
+1. Install python3.4, pySerial, and pyQt5
+2. Provide an as31 binary for your system and integrate it with the 6.115-IDE code from git
+3. It would be helpful it you could submit your as31 & associated changes for the benefit of others
 
 -----
 Usage
 -----
 
-Should be pretty intuitive, but will eventually write more, because there are some things that could use explaining.
+- Should be pretty intuitive. Let me know if something needs explaining.
+- It should be OK to connect or disconnect your R-31JP at any time.
+- I realize that the auto indent and comment alignment features are buggy right now. I will fix these soon.
+- Drag & drop is broken in Yosemite. This is a known bug with Qt and unresolvable until the 5.4.1 patch is released.
+- Please report other bugs and/or offer suggestions.
 
 --------
 Features
 --------
 
 - hyper-terminal and code window in one environment
-- automatically searches for and connects to serial device even when plugging in later
-- assembles and downloads code with one click
-- highlights code that caused assembler to throw errors
-- drag and drop asm & txt files in code editor to open
-- basic syntax highlighting, though admittedly the default color scheme is awful...
+- automatically scans for and connects to your R31JP
+- assembles and downloads code with one button press
+- highlights any lines in your code that caused the assembler to throw errors
+- accepts drag and drop of asm & txt files into the code window
+- basic auto completion and syntax highlighting, though admittedly the default color scheme is awful...
 
 todo:
-- some basic toolbar and title-bar additions, including save-as
-- some basic icon modifications, including size
-- automatically keep comments aligned and neat, fix bugs with current implementation
-- test on windows
-- extended syntax highlighting
-- autocomplete
-- tooltips with information on 8051 syntax
-- searchable instructions by category like in manual
-- automatically maintain and load code appendix
-- code explorer/tree? but keep interface simple...
 - warn about unsaved work before exiting
-- scan ports other than most common two or give option of ports to try
+- automatically keep comments aligned and neat
+- extended syntax highlighting and auto completion
+- tooltips with information on 8051 syntax
+- ability to maintain a code appendix for labs
+- ability to upload code to 6.115 when needed
+- code explorer/tree? but keep interface simple...
+- scan ports other than the most common two
+- give user option of ports to try? I don't like interface complexity though...
+- provide a brew option that pulls from github & dependencies
 
 ————---
 Credits
 ————---
 
-Thank you to David Yamnitsky for insights gained from his 6.115 cmd-line script.
+Thank you to David Yamnitsky for serial/minmon insights gained from his 6.115 cmd-line script
 
 ————---
 License
@@ -64,6 +82,14 @@ Distributed under the MIT license, but subject to the licensing of all packages 
 ---------
 Changelog
 ---------
+
+version 0.03
+- added as31 source code with instructions for building on individual systems
+- added auto completion for 8051 instructions
+- added better installation instructions
+- fixed bugs in the syntax highlighting
+- improved the toolbar and other various modification
+- [a regression is possible, as I did not have a chance to test changes on R-31JP yet]
 
 version 0.02
 - added as31 for win and os recognition
