@@ -54,19 +54,24 @@ Features
 - highlights any lines in your code that caused the assembler to throw errors
 - accepts drag and drop of asm & txt files into the code window
 - basic auto completion and syntax highlighting, though admittedly the default color scheme is awful...
+- automatically keeps comments neatly aligned
 
 todo:
-- title/statusbar
+- treat \r and \n as one when following in terminal
+- search
+- problems with queuing
+- show byte data
+- g jump routine tool button?
 - warn about unsaved work before exiting
-- automatically keep comments aligned and neat
+- auto wrap comments
 - extended syntax highlighting and auto completion
 - tooltips with information on 8051 syntax
-- ability to maintain a code appendix for labs
+- ability to maintain a code appendix for labs and print
 - ability to upload code to 6.115 when needed
-- code explorer/tree? but keep interface simple...
+- code explorer/tree?
 - scan ports other than the most common two
-- give user option of ports to try? I don't like interface complexity though...
-- provide a brew option that pulls from github & dependencies
+- give user option of ports to try? I don't like interface complexity though
+- provide a brew option that automatically pulls from github & dependencies
 
 ————---
 Credits
@@ -83,6 +88,13 @@ Distributed under the MIT license, but subject to the licensing of all packages 
 ---------
 Changelog
 ---------
+
+version 0.05
+- added code to automatically keep comments aligned
+- added some basic shortcuts
+- fixed bug in syntax highlighter not highlighting indented labels
+- fixed bug with undo/redo
+- fixed/added other various minor bugs/tweaks
 
 version 0.04
 - added workaround for UnicodeDecodeError when unencodable data received

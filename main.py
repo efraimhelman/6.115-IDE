@@ -18,6 +18,7 @@ import re
 import sys
 import serial
 import shutil
+import string
 import subprocess
 import tempfile
 import threading
@@ -40,6 +41,9 @@ class MainWindow(QMainWindow):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+
+        # appearance
+        self.setWindowTitle('6.115 IDE')
 
         # configuration
         self.config = configparser.ConfigParser()
@@ -99,25 +103,25 @@ class CodeWidget(QPlainTextEdit):
         super().__init__(parent)
         self.root = root
 
-        # generate file paths
+        # file paths
         self.file_path = ''
         self.temp_dir_path = tempfile.mkdtemp('terminal')
         self.temp_asm_path = os.path.join(self.temp_dir_path, 'lab.asm')
         self.temp_hex_path = os.path.join(self.temp_dir_path, 'lab.hex')
 
-        # text settings
+        # configuration
+        self.comment_gap = int(self.root.config['code']['comment_gap'])  # number of spaces between code and comment
         self.line_length = int(self.root.config['code']['line_length'])  # number of chars before comment wraps
         self.tab_length = int(self.root.config['code']['tab_length'])  # number of spaces to replace a tab with
-        # self.setCenterOnScroll(True)
 
-        # use monospaced font
+        # monospaced font & line width
         fixed_font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
         fixed_font.setPixelSize(12)
-        self.setFont(fixed_font)
         font_width = QFontMetrics(fixed_font).averageCharWidth()
+        self.setFont(fixed_font)
         self.setMinimumWidth(font_width * self.line_length * 1.1)
 
-        # setup auto completion and syntax highlighting
+        # suggestions
         self.prefix = None
         self.suffix = None
         self.suggestion = QListWidget(self)
@@ -131,6 +135,8 @@ class CodeWidget(QPlainTextEdit):
         self.suggestion.setSelectionMode(QAbstractItemView.SingleSelection)
         self.suggestion.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.suggestion.show = self._show_suggestion
+
+        # syntax highlighting
         self.syntax_highlighter = SyntaxHighlighter(self.document(), self.root.config)
 
         # serial
@@ -144,6 +150,8 @@ class CodeWidget(QPlainTextEdit):
         recent_file = self.root.config['file']['last']
         if recent_file and os.path.exists(recent_file):
             self.open(recent_file)
+        else:
+            self.new()
 
     def assemble(self):
         # save code to temporary file and
@@ -190,22 +198,12 @@ class CodeWidget(QPlainTextEdit):
             self._log_error(errors)
             return False
 
-    def clean(self, code):
-        # some basic optimizations
-        code = code.replace('\t', ' '*self.tab_length)
-        code = code.replace('\r', '\n')
-        code = re.sub('\n +(?=\n|$)', '\n', code)
-        code = re.sub(' +(?=\n|$)', '', code)
-        code = re.sub('\n\n\n+', '\n', code)  # fixme: yes? no?
-        # code = re.sub('^\n\n+', '\n', code) messes up copies in middle fixme: separate copy and original paste?
-        # code = re.sub('\n+$', '', code)
-        return code
-
     def closeEvent(self, event):
         # fixme: check and ask user to save code if needed
         # clean up temporary files
         if self.temp_dir_path:
             shutil.rmtree(self.temp_dir_path)
+            self.temp_dir_path = None
         # save configuration
         self.root.config['file']['last'] = self.file_path
         self.root.config['code']['line_length'] = str(self.line_length)
@@ -232,17 +230,10 @@ class CodeWidget(QPlainTextEdit):
         else:
             event.ignore()
 
-    def _url_can_be_opened(self, url):
-        path = url.toLocalFile()
-        if path[-4:] in ('.asm', '.txt') and os.path.exists(path):
-            return True
-        return False
-
     def insertFromMimeData(self, source):
         # catch any attempt to paste text and clean it up first
         if source.hasText():
-            text = source.text()
-            text = self.clean(text)
+            text = self._clean(source.text())
             self.textCursor().insertText(text)
 
     def keyPressEvent(self, event):
@@ -254,93 +245,89 @@ class CodeWidget(QPlainTextEdit):
             self.suggestion.keyPressEvent(event)
             return
 
-        char = event.text()
-        key = event.key()
-
-        # convert tabs to spaces
-        if key == Qt.Key_Tab:
-            event.accept()
-            self.textCursor().insertText(' ' * self.tab_length)
-
-        # auto-indent newlines
-        elif char in ('\n', '\r'):
-            event.accept()
-            cursor = self.textCursor()
-            line = cursor.block()
-            text = '\n'
-            if line.isValid():
-                # current line is a label
-                if re.match('[a-zA-Z$_][a-zA-Z0-9$_]*:', line.text()):
-                    text += ' '*self.tab_length
-                # current line is indented
-                elif re.match(' +[^ ]', line.text()):
-                    text += re.match('( +)', line.text()).group(1)
-            cursor.insertText(text)
-
-        # auto indent and wrap comments
-        elif key == Qt.Key_Semicolon:
-            event.accept()
-            cursor = self.textCursor()
-            line = cursor.block()
-            # ignore if already in a comment
-            if ';' in line.text()[:cursor.positionInBlock()]:
-                cursor.insertText(';')
-            elif line.text().isspace():
-                cursor.select(QTextCursor.BlockUnderCursor)
-                cursor.insertText('\n; ')
-            else:
-                # find minimum acceptable offset
-                offset = cursor.positionInBlock()
-                other_line = line.previous()
-                while other_line.isValid() and ';' in other_line.text():
-                    other_offset = other_line.text().find(';')
-                    offset = offset if other_offset < offset else other_offset
-                    other_line = other_line.previous()
-                other_line = line.next()
-                while other_line.isValid() and ';' in other_line.text():
-                    other_offset = other_line.text().find(';')
-                    offset = offset if other_offset < offset else other_offset
-                    other_line = other_line.next()
-                if offset > cursor.positionInBlock():
-                    text = ' ' * (offset - cursor.positionInBlock()) + '; '
-                else:
-                    text = '; '
-                cursor.insertText(text)
-
-        # auto remove a full tab length when backspace is applied to tab area
-        # fixme: comment and simplify
-        elif key == Qt.Key_Backspace:
-            cursor = self.textCursor()
-            line = cursor.block()
-            position = cursor.positionInBlock()
-            if position > 0 and not cursor.selectedText() and line.text()[:position] == ' '*position:
-                event.accept()
-                amount = len(re.match(' +', line.text()).group()) % self.tab_length
-                if amount == 0:
-                    amount = self.tab_length
-                right_move = self.tab_length - (position % self.tab_length) if position < self.tab_length else 0
-                cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.MoveAnchor, right_move)
-                left_move = position + right_move if position < self.tab_length else amount
-                cursor.movePosition(QTextCursor.PreviousCharacter, QTextCursor.KeepAnchor, left_move)
-                cursor.removeSelectedText()
-            else:
-                super().keyPressEvent(event)
-
-        # anything else let qt handle
-        else:
+        # if keypress is directed at navigation
+        if event in range(30, 44):  # 30 -> 43 are QKeySequence.Move...
             super().keyPressEvent(event)
+            return
 
-        # provide auto completion suggestions
-        if event.text() or event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
+        # if keypress is directed at selection
+        if event == QKeySequence.SelectAll or event in range(44, 58):  # 44 -> 57 are QKeySequence.Select...
+            super().keyPressEvent(event)
+            return
+
+        # if keypress is directed as file io
+        if event in (QKeySequence.Save, QKeySequence.Open, QKeySequence.New):
+            event.accept()
+            if event == QKeySequence.Save:
+                self.save()
+            elif event == QKeySequence.Open:
+                self.open()
+            elif event == QKeySequence.New:
+                self.new()
+            return
+
+        # if keypress is directed at undo/redo
+        if event in (QKeySequence.Undo, QKeySequence.Redo):
+            event.accept()
+            if event == QKeySequence.Undo:
+                self.undo()
+            elif event == QKeySequence.Redo:
+                self.redo()
+            return
+
+        # if keypress is directed at character insertion/removal
+        if event.text() in string.printable or event.key() == Qt.Key_Backspace:
+            event.accept()
+            text = event.text()
+            cursor = self.textCursor()
+            # auto indent for backspace
+            if event.key() == Qt.Key_Backspace:
+                text = ''
+                # remove previous character
+                if not cursor.selectedText():
+                    cursor.movePosition(QTextCursor.PreviousCharacter, QTextCursor.KeepAnchor)
+                # remove semicolon for comments since can't just remove leading space
+                if re.match('[^;]*;$', cursor.block().text()[:cursor.positionInBlock()]):
+                    cursor.movePosition(QTextCursor.PreviousCharacter, QTextCursor.KeepAnchor)
+            # auto indent for tabs
+            elif text == '\t':
+                text = ' ' * self.tab_length  # fixme min(tab_length, next_tab_stop)
+            # auto indent for newlines
+            elif text in ('\n', '\r'):
+                text = '\n'
+                block = cursor.block()
+                while block.isValid():
+                    # block starts with a comment
+                    if re.match(' *;', block.text()):
+                        block = block.previous()
+                    # block starts with a label
+                    elif re.match(' *[a-zA-Z$_][a-zA-Z0-9$_]*:', block.text()):
+                        text += re.match('( *)', block.text()).group(1) + ' '*self.tab_length
+                        break
+                    # block starts with an instruction
+                    elif re.match(' +[^ ]', block.text()):
+                        text += re.match('( +)', block.text()).group(1)
+                        break
+                    # block is blank
+                    else:
+                        break
+            position = cursor.position()
+            removed = len(cursor.selectedText())
+            added = len(text)
+            cursor.beginEditBlock()
+            cursor.insertText(text)
+            self._align(position, removed, added)
+            cursor.endEditBlock()
+
             self.suggestion.show()
         else:
             self.suggestion.hide()
 
     def new(self):
         self.file_path = ''
-        self.setPlainText('')
+        self.document.setPlainText('')
+        self.document().clearUndoRedoStacks()
         self.setExtraSelections([])
-        self.syntax_highlighter.setDocument(self.document())
 
     def open(self, file_path=None):
         # get file_path
@@ -351,11 +338,11 @@ class CodeWidget(QPlainTextEdit):
                 return
         # open file
         with open(file_path, 'r') as file:
-            code = file.read()
-            code = self.clean(code)
-            self.setPlainText(code)
+            code = self._clean(file.read())
+            self.document().setPlainText(code)
+            self._align(0, None, len(code))
+            self.document().clearUndoRedoStacks()
             self.setExtraSelections([])
-            self.syntax_highlighter.setDocument(self.document())
         self.file_path = file_path
 
     def save(self):
@@ -385,7 +372,72 @@ class CodeWidget(QPlainTextEdit):
         # send hex data
         self.terminal.serial_download(hex_data)
 
+    def _align(self, position, removed, added):
+
+        # group affected blocks
+        cursor = self.textCursor()
+        cursor.setPosition(position)
+        block = cursor.block()
+        blocks = [[block]] if ';' in block.text() else [[], []]
+        while True:
+            block = block.previous()
+            if not block.isValid():
+                break
+            if ';' not in block.text():
+                break
+            blocks[0].insert(0, block)
+        block = cursor.block()
+        while True:
+            block = block.next()
+            if not block.isValid():
+                break
+            if ';' not in block.text():
+                if block.position() <= position + added:  # =< in case newline since .position() is after
+                    blocks.append([])
+                else:
+                    break
+            else:
+                blocks[-1].append(block)
+
+        # align comments if needed but leave cursor in same place
+        cursor_position = self.textCursor().positionInBlock()
+        cursor_block = self.textCursor().block()
+        for comment_group in blocks:
+            if not comment_group:
+                continue
+            # get prefix and gap length for each block in group
+            lengths = [[len(g) for g in re.match('(.*?)( *);( *)', b.text()).groups()] for b in comment_group]
+            # get minimum acceptable comment offset but don't insist on gap when comment is on its own line
+            minimum = max(l[0] + self.comment_gap if l[0] else 0 for l in lengths)
+            # realign comments that need realigning
+            for block, (prefix, gap, post_gap) in zip(comment_group, lengths):
+                if not prefix + gap == minimum or not post_gap == 1:
+                    text = block.text()
+                    text = text[:prefix] + ' '*(minimum-prefix) + '; ' + text[prefix+gap+1+post_gap:]
+                    cursor = QTextCursor(block)
+                    cursor.setPosition(block.position())
+                    cursor.setPosition(block.position() + block.length() - 1, QTextCursor.KeepAnchor)
+                    cursor.insertText(text)
+                    # reset text cursor if needed
+                    if block == cursor_block:
+                        if cursor_position > prefix + gap + 1 + post_gap:
+                            cursor_position = cursor_position + (minimum - prefix - gap) - (post_gap + 1)
+                        elif cursor_position > prefix + gap:
+                            cursor_position = minimum + 2
+                        cursor.setPosition(cursor_block.position() + cursor_position)
+                        self.setTextCursor(cursor)
+
+    def _clean(self, code):
+        # exchange tabs for spaces and carriage returns for newlines
+        code = code.replace('\t', ' ' * self.tab_length).replace('\r', '\n')
+        # remove trailing whitespace
+        code = re.sub(' +(?=\n|$)', '', code)
+        # remove multi-line gaps
+        code = re.sub('\n\n\n+', '\n\n', code)
+        return code
+
     def _apply_suggestion(self, suggestion):
+        # fixme: add ' ' for instructions, use ':' for labels, etc; but only if not already there
         new_suffix = suggestion[len(self.prefix):]
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, len(self.suffix))
@@ -406,7 +458,7 @@ class CodeWidget(QPlainTextEdit):
             self.prefix = match.group(1)
             self.suffix = re.match('([a-zA-Z]*)', line_suffix).group(1)
             suggestion = [ins for ins in INSTRUCTIONS_8051 if ins.startswith(self.prefix)]
-            if len(suggestion) == 1 and suggestion[0] == self.prefix:
+            if len(suggestion) == 1 and suggestion[0] == self.prefix + self.suffix:
                 suggestion = []
 
         return suggestion
@@ -452,6 +504,12 @@ class CodeWidget(QPlainTextEdit):
         if not self.suggestion.isVisible():
             super(QListWidget, self.suggestion).show()
 
+    def _url_can_be_opened(self, url):
+        path = url.toLocalFile()
+        if path[-4:] in ('.asm', '.txt') and os.path.exists(path):
+            return True
+        return False
+
 
 class SyntaxHighlighter(QSyntaxHighlighter):
 
@@ -460,15 +518,15 @@ class SyntaxHighlighter(QSyntaxHighlighter):
         # fixme: addresses, decl, unknowns, regs, numbers/hex, etc
         self.rules = []
         # comments
-        style = self.style(config['code']['comment'])
+        style = self.style(config['syntax']['comment'])
         self.rules.append(('(;.*)(?:\n|$)', style))
         # instructions
         # use reversed() so checks for full instruction instead of stopping 'movx' after finding 'mov'
-        style = self.style(config['code']['instruction'])
+        style = self.style(config['syntax']['instruction'])
         self.rules.append(('(?:\n|^) *(%s)(?:[ ;]|$)' % '|'.join(reversed(INSTRUCTIONS_8051)), style))
         # labels
-        style = self.style(config['code']['label'])
-        self.rules.append(('(?:\n|^)([a-zA-Z$_][a-zA-Z0-9$_]*:)', style))
+        style = self.style(config['syntax']['label'])
+        self.rules.append(('(?:\n|^) *([a-zA-Z$_][a-zA-Z0-9$_]*:)', style))
 
     def style(self, description=''):
         values = description.split(', ')
@@ -605,6 +663,7 @@ class TerminalWidget(QPlainTextEdit):
                     continue
 
             # read data from device
+            # fixme: don'r switch off, causes issues; queue it somehow?
             self._serial_read()
 
             # write data to device
