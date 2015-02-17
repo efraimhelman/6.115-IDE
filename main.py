@@ -206,8 +206,6 @@ class CodeWidget(QPlainTextEdit):
             self.temp_dir_path = None
         # save configuration
         self.root.config['file']['last'] = self.file_path
-        self.root.config['code']['line_length'] = str(self.line_length)
-        self.root.config['code']['tab_length'] = str(self.tab_length)
 
     def dragEnterEvent(self, event):
         # open files through drag and drop
@@ -325,7 +323,7 @@ class CodeWidget(QPlainTextEdit):
 
     def new(self):
         self.file_path = ''
-        self.document.setPlainText('')
+        self.document().setPlainText('')
         self.document().clearUndoRedoStacks()
         self.setExtraSelections([])
 
