@@ -57,8 +57,11 @@ Features
 - automatically keeps comments neatly aligned
 
 todo:
+- add tools to view .hex and .lst files generated from assembly
+- add one line brew/tap formula to install code and all dependencies (and/or packager for win/osx ?)
+- add launcher for mac/win
 - treat \r and \n as one when following in terminal
-- search
+- add search
 - problems with queuing
 - show byte data
 - g jump routine tool button?
@@ -71,7 +74,6 @@ todo:
 - code explorer/tree?
 - scan ports other than the most common two
 - give user option of ports to try? I don't like interface complexity though
-- provide a brew option that automatically pulls from github & dependencies
 
 ————---
 Credits
@@ -88,6 +90,10 @@ Distributed under the MIT license, but subject to the licensing of all packages 
 ---------
 Changelog
 ---------
+
+version 0.06
+- added cursor to terminal and forced errors & messages onto their own line
+- fixed bug where would only find relative files when IDE directory was the working directory
 
 version 0.05
 - added code to automatically keep comments aligned

@@ -36,6 +36,9 @@ INSTRUCTIONS_8051 = ['acall', 'add', 'addc', 'ajmp', 'anl', 'cjne', 'clr', 'cpl'
                     'rl', 'rlc', 'rr', 'rrc', 'setb', 'sjmp', 'subb', 'swap',
                     'xch', 'xrl']
 
+# load relative path no matter what working directory IDE is launched from
+relative_path = lambda path: os.path.join(os.path.dirname(__file__), path)
+
 
 class MainWindow(QMainWindow):
 
@@ -47,7 +50,7 @@ class MainWindow(QMainWindow):
 
         # configuration
         self.config = configparser.ConfigParser()
-        self.config.read('config.ini')
+        self.config.read(relative_path('config.ini'))
 
         # widgets
         self.terminal_widget = TerminalWidget(self, self)
@@ -68,7 +71,7 @@ class MainWindow(QMainWindow):
         self.code_widget.closeEvent(event)
         self.terminal_widget.closeEvent(event)
         # save configuration
-        with open('config.ini', 'w') as config_file:
+        with open(relative_path('config.ini'), 'w') as config_file:
             self.config.write(config_file)
 
     def configure(self):
@@ -87,12 +90,12 @@ class MainToolbar(QToolBar):
         self.addSeparator()
         self._add_button('Configure', 'config.png', self.root.configure)
 
-    def _add_button(self, tooltip, icon, action):
+    def _add_button(self, tooltip, icon, action, menu=None):
         # fixme: use QActions?
         # fixme: add shortcuts
         button = QToolButton(self)
         button.clicked.connect(action)
-        button.setIcon(QIcon('resources/images/%s' % icon))
+        button.setIcon(QIcon(relative_path('resources/images/%s') % icon))
         button.setToolTip(tooltip)
         self.addWidget(button)
 
@@ -161,9 +164,9 @@ class CodeWidget(QPlainTextEdit):
 
         # choose correct assembler
         if sys.platform == 'darwin':
-            assembler = 'resources/as31/as31_osx'
+            assembler = relative_path('resources/as31/as31_osx')
         elif sys.platform == 'win32':
-            assembler = 'resources/as31/as31_win'
+            assembler = relative_path('resources/as31/as31_win')
 
         # assemble code
         as31_process = subprocess.Popen([assembler, '-l', self.temp_asm_path],
@@ -370,6 +373,13 @@ class CodeWidget(QPlainTextEdit):
         # send hex data
         self.terminal.serial_download(hex_data)
 
+    def view_temp_files(self):
+        # platform dependent
+        if sys.platform == 'darwin':
+            subprocess.call(['open', self.temp_dir_path])
+        elif sys.platform == 'win32':
+            os.startfile(self.temp_dir_path)
+
     def _align(self, position, removed, added):
 
         # group affected blocks
@@ -516,17 +526,17 @@ class SyntaxHighlighter(QSyntaxHighlighter):
         # fixme: addresses, decl, unknowns, regs, numbers/hex, etc
         self.rules = []
         # comments
-        style = self.style(config['syntax']['comment'])
+        style = SyntaxHighlighter.style(config['syntax']['comment'])
         self.rules.append(('(;.*)(?:\n|$)', style))
         # instructions
         # use reversed() so checks for full instruction instead of stopping 'movx' after finding 'mov'
-        style = self.style(config['syntax']['instruction'])
+        style = SyntaxHighlighter.style(config['syntax']['instruction'])
         self.rules.append(('(?:\n|^) *(%s)(?:[ ;]|$)' % '|'.join(reversed(INSTRUCTIONS_8051)), style))
         # labels
-        style = self.style(config['syntax']['label'])
+        style = SyntaxHighlighter.style(config['syntax']['label'])
         self.rules.append(('(?:\n|^) *([a-zA-Z$_][a-zA-Z0-9$_]*:)', style))
 
-    def style(self, description=''):
+    def style(description=''):
         values = description.split(', ')
         style = QTextCharFormat()
         style.setForeground(QColor(values[0]))  # first value must be a color
@@ -557,11 +567,15 @@ class TerminalWidget(QPlainTextEdit):
         self.highlighted_line = None
         self.highlighted_format = QTextBlockFormat()
         self.highlighted_format.setBackground(Qt.yellow)
-        self.setReadOnly(True)
         self.setCursor(Qt.ArrowCursor)
+        self.setReadOnly(True)
+        self.setTextInteractionFlags(self.textInteractionFlags() | Qt.TextSelectableByKeyboard)
 
         # terminal settings
         self.echo = False
+        self.logging_serial = False  # in order to place errors and messages on their own line
+        self.error_style = SyntaxHighlighter.style('red, bold')
+        self.message_style = SyntaxHighlighter.style('blue, bold')
 
         # serial interface thread
         self.baud_rate = int(self.root.config['serial']['baud_rate'])
@@ -739,31 +753,33 @@ class TerminalWidget(QPlainTextEdit):
         # signal that data was sent
         self.data_sent.emit(data)
 
+    def _log(self, text, style=None):
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        if style:
+            cursor.setCharFormat(style)
+        if self.logging_serial:
+            text = '\n' + text
+        cursor.insertText(text)
+
     def _log_error(self, description):
-        for line in description.split('\n'):  # since using html, \n doesn't mean anything
-            self.appendHtml('<span style="color:red;font-weight:bold;">%s</span>' % line)
+        self.logging_serial = False
+        self._log(description + '\n', self.error_style)
 
     def _log_message(self, message):
-        for line in message.split('\n'):  # since using html, \n doesn't mean anything
-            self.appendHtml('<span style="color:blue;font-weight:bold;">%s</span>' % line)
+        self.logging_serial = False
+        self._log(message + '\n', self.message_style)
 
     def _log_serial(self, data):
         # log data received from connected device
-        # with no newline or special formatting
-        cursor = self.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        cursor.setCharFormat(QTextCharFormat())
-
         try:
             text = data.decode('utf-8')
         except UnicodeDecodeError as error:
             text = data.decode('utf-8', 'ignore')
             self._log_error('Some data received that could not be encoded in UTF-8.')
-
         if text:
-            cursor.insertText(text)
-            # scroll to cursor
-            self.setTextCursor(cursor)
+            self.logging_serial = True   # force errors and messages onto their own line
+            self._log(text)
 
 
 def launch():
