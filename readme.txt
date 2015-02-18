@@ -57,6 +57,7 @@ Features
 - automatically keeps comments neatly aligned
 
 todo:
+- fit comment alignment with desired minmon look
 - add tools to view .hex and .lst files generated from assembly
 - add one line brew/tap formula to install code and all dependencies (and/or packager for win/osx ?)
 - add launcher for mac/win
@@ -94,6 +95,7 @@ Changelog
 version 0.06
 - added cursor to terminal and forced errors & messages onto their own line
 - fixed bug where would only find relative files when IDE directory was the working directory
+- fixed copy/cut/paste
 
 version 0.05
 - added code to automatically keep comments aligned

@@ -76,6 +76,7 @@ class MainWindow(QMainWindow):
 
     def configure(self):
         self.terminal_widget._log_error('Not implemented. Edit config.ini file.')
+        self.code_widget.view_temp_files()
 
 
 class MainToolbar(QToolBar):
@@ -231,12 +232,6 @@ class CodeWidget(QPlainTextEdit):
         else:
             event.ignore()
 
-    def insertFromMimeData(self, source):
-        # catch any attempt to paste text and clean it up first
-        if source.hasText():
-            text = self._clean(source.text())
-            self.textCursor().insertText(text)
-
     def keyPressEvent(self, event):
 
         # if keypress is directed at suggestion popup let it handle it
@@ -244,16 +239,6 @@ class CodeWidget(QPlainTextEdit):
                 (Qt.Key_Enter, Qt.Key_Return, Qt.Key_Escape,
                  Qt.Key_Tab, Qt.Key_Backtab, Qt.Key_Down, Qt.Key_Up):
             self.suggestion.keyPressEvent(event)
-            return
-
-        # if keypress is directed at navigation
-        if event in range(30, 44):  # 30 -> 43 are QKeySequence.Move...
-            super().keyPressEvent(event)
-            return
-
-        # if keypress is directed at selection
-        if event == QKeySequence.SelectAll or event in range(44, 58):  # 44 -> 57 are QKeySequence.Select...
-            super().keyPressEvent(event)
             return
 
         # if keypress is directed as file io
@@ -267,17 +252,40 @@ class CodeWidget(QPlainTextEdit):
                 self.new()
             return
 
+        # if keypress is directed at navigation
+        if event in range(30, 44):  # 30 -> 43 are QKeySequence.Move...
+            super().keyPressEvent(event)
+            return
+
+        # if keypress is directed at selection
+        if event == QKeySequence.SelectAll or event in range(44, 58):  # 44 -> 57 are QKeySequence.Select...
+            super().keyPressEvent(event)
+            return
+
         # if keypress is directed at undo/redo
         if event in (QKeySequence.Undo, QKeySequence.Redo):
+            super().keyPressEvent(event)
+            return
+
+        # if keypress is directed at copy/cut/paste
+        # fixme semi merge with next if, instead of calling keypress again
+        if event in (QKeySequence.Copy, QKeySequence.Cut, QKeySequence.Paste):
             event.accept()
-            if event == QKeySequence.Undo:
-                self.undo()
-            elif event == QKeySequence.Redo:
-                self.redo()
+            if event == QKeySequence.Copy or event == QKeySequence.Cut:
+                if self.textCursor().hasSelection():
+                    data = self.createMimeDataFromSelection()
+                    QApplication.clipboard().setMimeData(data)
+                    if event == QKeySequence.Cut:
+                        self.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Backspace, Qt.NoModifier))
+            elif event == QKeySequence.Paste:
+                data = QApplication.clipboard().mimeData()
+                if data and data.hasText() and data.text():
+                    data = self._clean(data.text())
+                    self.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_A, Qt.NoModifier, data))
             return
 
         # if keypress is directed at character insertion/removal
-        if event.text() in string.printable or event.key() == Qt.Key_Backspace:
+        if event.text() and all(c in string.printable for c in event.text()) or event.key() == Qt.Key_Backspace:
             event.accept()
             text = event.text()
             cursor = self.textCursor()
@@ -294,6 +302,7 @@ class CodeWidget(QPlainTextEdit):
             elif text == '\t':
                 text = ' ' * self.tab_length  # fixme min(tab_length, next_tab_stop)
             # auto indent for newlines
+            # fixme: like comments, always, not just at individual char insertion?
             elif text in ('\n', '\r'):
                 text = '\n'
                 block = cursor.block()
