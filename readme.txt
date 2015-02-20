@@ -5,7 +5,7 @@ Requirements
 
 1. A python, pyQt5, and pySerial environment
 2. As of now only tested with py3.x and pyQt5, and probably only works with these
-3. As of now only tested with OsX, but should work with Windows and Linux
+3. As of now only tested with OsX and Windows, but should work with Linux
 4. As of now only scans for `com1` and `/dev/tty.usbserial` serial ports - edit config.ini if needed
 
 ————------------------
@@ -55,10 +55,11 @@ Features
 - accepts drag and drop of asm & txt files into the code window
 - basic auto completion and syntax highlighting, though admittedly the default color scheme is awful...
 - automatically keeps comments neatly aligned
+- currently the tools/config button opens the asm/hex/lst folder for viewing hex and and lst files
 
 todo:
-- fit comment alignment with desired minmon look
-- add tools to view .hex and .lst files generated from assembly
+- fit comment alignment with desired minmon look? fixed distance comments and block comments...
+- integrate the .hex and .lst files generated from assembly; currently the tools button opens the asm/hex folder
 - add one line brew/tap formula to install code and all dependencies (and/or packager for win/osx ?)
 - add launcher for mac/win
 - treat \r and \n as one when following in terminal
@@ -91,6 +92,9 @@ Distributed under the MIT license, but subject to the licensing of all packages 
 ---------
 Changelog
 ---------
+
+version 0.07
+- fix for windows compatibility
 
 version 0.06
 - added cursor to terminal and forced errors & messages onto their own line

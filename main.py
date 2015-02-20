@@ -176,7 +176,7 @@ class CodeWidget(QPlainTextEdit):
         errors = errors.decode("utf-8")
 
         # no errors
-        if errors == 'Begin Pass #1\nBegin Pass #2\n':
+        if 'error' not in errors.lower() and 'warning' not in errors.lower():
             # un-mark lines previously marked as errors
             self.setExtraSelections([])
             self._log_message('Code assembled successfully.')
