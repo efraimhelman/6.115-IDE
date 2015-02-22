@@ -35,12 +35,11 @@ Other (Linux, etc):
 3. It would be helpful it you could submit your as31 & associated changes for the benefit of others
 
 -----
-Usage
+Notes
 -----
 
 - Should be pretty intuitive. Let me know if something needs explaining.
 - It should be OK to connect or disconnect your R-31JP at any time.
-- I realize that the auto indent and comment alignment features are buggy right now. I will fix these soon.
 - Drag & drop is broken in Yosemite. This is a known bug with Qt and unresolvable until the 5.4.1 patch is released.
 - Please report other bugs and/or offer suggestions.
 
@@ -58,6 +57,8 @@ Features
 - currently the tools/config button opens the asm/hex/lst folder for viewing hex and and lst files
 
 todo:
+- auto update
+- cx_freeze import and license
 - fit comment alignment with desired minmon look? fixed distance comments and block comments...
 - integrate the .hex and .lst files generated from assembly; currently the tools button opens the asm/hex folder
 - add one line brew/tap formula to install code and all dependencies (and/or packager for win/osx ?)
@@ -94,6 +95,7 @@ Changelog
 ---------
 
 version 0.07
+- fix for newline and carriage return confusion issues in terminal window
 - fix for windows compatibility
 
 version 0.06

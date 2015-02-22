@@ -1,5 +1,5 @@
 ﻿#-------------------------------------------------------------------------------
-# Name:        6.115-IDE
+# Name:        main
 # Purpose:     IDE for development of the R-31JP system used in MITs course 6.115
 #
 # Author:      Efraim Helman
@@ -582,9 +582,11 @@ class TerminalWidget(QPlainTextEdit):
 
         # terminal settings
         self.echo = False
-        self.logging_serial = False  # in order to place errors and messages on their own line
+        self.logging_serial = False  # in order to force errors and messages onto their own line
+        self.logging_newline = False  # in order to merge \r and \n into one
         self.error_style = SyntaxHighlighter.style('red, bold')
         self.message_style = SyntaxHighlighter.style('blue, bold')
+        self.serial_style = QTextCharFormat()
 
         # serial interface thread
         self.baud_rate = int(self.root.config['serial']['baud_rate'])
@@ -765,19 +767,19 @@ class TerminalWidget(QPlainTextEdit):
     def _log(self, text, style=None):
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.End)
-        if style:
-            cursor.setCharFormat(style)
-        if self.logging_serial:
-            text = '\n' + text
+        cursor.setCharFormat(style)
         cursor.insertText(text)
+        self.setTextCursor(cursor)  # scroll to cursor
 
     def _log_error(self, description):
+        text = '\n'+description+'\n' if self.logging_serial and not self.logging_newline else description+'\n'
         self.logging_serial = False
-        self._log(description + '\n', self.error_style)
+        self._log(text, self.error_style)
 
     def _log_message(self, message):
+        text = '\n'+message+'\n' if self.logging_serial and not self.logging_newline else message+'\n'
         self.logging_serial = False
-        self._log(message + '\n', self.message_style)
+        self._log(text, self.message_style)
 
     def _log_serial(self, data):
         # log data received from connected device
@@ -787,8 +789,21 @@ class TerminalWidget(QPlainTextEdit):
             text = data.decode('utf-8', 'ignore')
             self._log_error('Some data received that could not be encoded in UTF-8.')
         if text:
-            self.logging_serial = True   # force errors and messages onto their own line
-            self._log(text)
+            print([text])
+            # merge \n and \r; minmon uses both orders: runes and incantations?
+            text = re.sub('\r\n|\n\r|\r', '\n', text)
+            if self.logging_newline or not self.logging_serial:
+                # if not logging_serial, already forced onto newline by error or message
+                if text[0] in ('\r', '\n'):
+                    text = text[1:]
+            self.logging_newline = False
+            if not text:
+                return
+            if text[-1] == '\n':
+                self.logging_newline = True
+            # log communication
+            self.logging_serial = True
+            self._log(text, self.serial_style)
 
 
 def launch():
