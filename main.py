@@ -89,6 +89,7 @@ class MainToolbar(QToolBar):
         self.addSeparator()
         self._add_button('Assemble and send', 'device.png', self.root.code_widget.send)
         self.addSeparator()
+        self._add_button('Reassemble', 'refresh.png', self.root.code_widget.assemble)
         self._add_button('Configure', 'config.png', self.root.configure)
 
     def _add_button(self, tooltip, icon, action, menu=None):
@@ -114,7 +115,9 @@ class CodeWidget(QPlainTextEdit):
         self.temp_hex_path = os.path.join(self.temp_dir_path, 'lab.hex')
 
         # configuration
+        self.comment_block = re.compile(' *; *[\*\=]{3,}')
         self.comment_gap = int(self.root.config['code']['comment_gap'])  # number of spaces between code and comment
+        self.comment_offset = int(self.root.config['code']['comment_offset'])  # min offset for code following comments
         self.line_length = int(self.root.config['code']['line_length'])  # number of chars before comment wraps
         self.tab_length = int(self.root.config['code']['tab_length'])  # number of spaces to replace a tab with
 
@@ -279,6 +282,7 @@ class CodeWidget(QPlainTextEdit):
                         self.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Backspace, Qt.NoModifier))
             elif event == QKeySequence.Paste:
                 data = QApplication.clipboard().mimeData()
+                # fixme: encode utf-8 with ascii equivalent
                 if data and data.hasText() and data.text():
                     data = self._clean(data.text())
                     self.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_A, Qt.NoModifier, data))
@@ -390,22 +394,19 @@ class CodeWidget(QPlainTextEdit):
             os.startfile(self.temp_dir_path)
 
     def _align(self, position, removed, added):
+        # fixme: can be optimized for speed
 
         # group affected blocks
         cursor = self.textCursor()
         cursor.setPosition(position)
         block = cursor.block()
-        blocks = [[block]] if ';' in block.text() else [[], []]
+        in_comment_block = False
         while True:
+            if not block.previous().isValid() or ';' not in block.previous().text():
+                break
             block = block.previous()
-            if not block.isValid():
-                break
-            if ';' not in block.text():
-                break
-            blocks[0].insert(0, block)
-        block = cursor.block()
+        blocks = [[]]
         while True:
-            block = block.next()
             if not block.isValid():
                 break
             if ';' not in block.text():
@@ -413,8 +414,20 @@ class CodeWidget(QPlainTextEdit):
                     blocks.append([])
                 else:
                     break
+            elif self.comment_block.match(block.text()):
+                if not in_comment_block:
+                    if block.position() <= position + added:  # =< in case newline since .position() is after
+                        blocks.append([block])
+                        in_comment_block = True
+                    else:
+                        break
+                else:
+                    blocks[-1].append(block)
+                    blocks.append([])
+                    in_comment_block = False
             else:
                 blocks[-1].append(block)
+            block = block.next()
 
         # align comments if needed but leave cursor in same place
         cursor_position = self.textCursor().positionInBlock()
@@ -426,10 +439,13 @@ class CodeWidget(QPlainTextEdit):
             lengths = [[len(g) for g in re.match('(.*?)( *);( *)', b.text()).groups()] for b in comment_group]
             # get minimum acceptable comment offset but don't insist on gap when comment is on its own line
             minimum = max(l[0] + self.comment_gap if l[0] else 0 for l in lengths)
+            if not minimum == 0:
+                minimum = max(minimum, self.comment_offset)
             # realign comments that need realigning
             for block, (prefix, gap, post_gap) in zip(comment_group, lengths):
                 if not prefix + gap == minimum or not post_gap == 1:
                     text = block.text()
+                    # fixme: ;=== not ; ===, or ;    **** vs ; ***** for comment blocks?
                     text = text[:prefix] + ' '*(minimum-prefix) + '; ' + text[prefix+gap+1+post_gap:]
                     cursor = QTextCursor(block)
                     cursor.setPosition(block.position())
@@ -458,8 +474,10 @@ class CodeWidget(QPlainTextEdit):
         new_suffix = suggestion[len(self.prefix):]
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor, len(self.suffix))
+        position = cursor.position()
         cursor.insertText(new_suffix)
         self.setTextCursor(cursor)
+        self._align(position, len(self.suffix), len(new_suffix))
 
     def _get_suggestion(self):
 
@@ -697,22 +715,28 @@ class TerminalWidget(QPlainTextEdit):
                 if action == 'download':
                     self.log_message.emit('Hit RESET in MON mode to download file...')
                     # wait for r31jp to be ready
-                    while True:  # fixme: add a timeout?
+                    while True:  # fixme: add a timeout
                         read_data = self._serial_read()
-                        if read_data == b'*':
+                        if read_data.endswith(b'*'):
                             break
                     # initiate transfer
-                    self._serial_write(b'DD')
-                    while True:  # fixme: add a timeout?
+                    self._serial_write(b'd')
+                    while True:  # fixme: add a timeout
                         read_data = self._serial_read()
-                        if read_data == b'>':
+                        if read_data.endswith(b'>'):
                             break
+                        '''
+                        elif read_data:
+                            # something went wrong
+                            self.log_error.emit('Error communicating with device. Data not sent.')
+                        '''
                     # send data
                     self.log_message.emit('Sending data...')
+                    # fixme: alternate read/write by record chunk to help show progress to user
                     self._serial_write(write_data)
                     while True:  # fixme: add a timeout?
                         read_data = self._serial_read()
-                        if read_data and not read_data == b'.':
+                        if read_data and not read_data.endswith(b'.'):
                             break
                     self.log_message.emit('Data sent successfully.')
 
@@ -789,7 +813,6 @@ class TerminalWidget(QPlainTextEdit):
             text = data.decode('utf-8', 'ignore')
             self._log_error('Some data received that could not be encoded in UTF-8.')
         if text:
-            print([text])
             # merge \n and \r; minmon uses both orders: runes and incantations?
             text = re.sub('\r\n|\n\r|\r', '\n', text)
             if self.logging_newline or not self.logging_serial:

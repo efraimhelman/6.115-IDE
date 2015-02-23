@@ -57,6 +57,11 @@ Features
 - currently the tools/config button opens the asm/hex/lst folder for viewing hex and and lst files
 
 todo:
+- recognize when probably still in monmode and following a *, and auto download without need for reset
+- fix autocomplete popup, doesn't always exit when clicking elsewhere, or when single clicking inside
+- add download timeouts/exiting and better progress indicator by writing record at a time
+- separate assemble option/hex/lst etc, like for burning
+- auto align command parameters like in minmon? add space if none?
 - auto update
 - cx_freeze import and license
 - fit comment alignment with desired minmon look? fixed distance comments and block comments...
@@ -93,6 +98,12 @@ Distributed under the MIT license, but subject to the licensing of all packages 
 ---------
 Changelog
 ---------
+
+version 0.08
+- added a dedicated reassemble button
+- fixed some downloading to device bugs
+- fixed comment alignment to treat ; **** or ; ==== as block delimiters - prettier minmon!
+- fixed comment alignment to first to try to align *all* code following comments to each other using minimum offset
 
 version 0.07
 - fix for newline and carriage return confusion issues in terminal window
